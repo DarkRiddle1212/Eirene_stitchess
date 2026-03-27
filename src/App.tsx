@@ -78,8 +78,8 @@ class ErrorBoundary extends (React.Component as any) {
 
 // --- Utilities ---
 
-const optimizeUnsplashUrl = (url: string, width: number = 800, quality: number = 80) => {
-  if (!url.includes('images.unsplash.com')) return url;
+const optimizeUnsplashUrl = (url: string | null | undefined, width: number = 800, quality: number = 80) => {
+  if (!url || typeof url !== 'string' || !url.includes('images.unsplash.com')) return url || '';
   
   try {
     const urlObj = new URL(url);
