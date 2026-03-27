@@ -22,77 +22,17 @@ import {
   Trash2,
   LogIn,
   LogOut,
-  AlertCircle
+  AlertCircle,
+  Edit2,
+  Save,
+  Upload
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import React, { useState, useEffect, FormEvent, Component, ErrorInfo, ReactNode } from 'react';
-import { 
-  collection, 
-  addDoc, 
-  deleteDoc, 
-  doc, 
-  onSnapshot, 
-  query, 
-  orderBy, 
-  getDocFromServer,
-  Timestamp,
-  serverTimestamp
-} from 'firebase/firestore';
-import { onAuthStateChanged, User } from 'firebase/auth';
-import { db, auth, googleProvider, signInWithPopup, signOut } from './firebase';
+import { supabase } from './supabase';
+import { User } from '@supabase/supabase-js';
 
 // --- Error Handling ---
-
-enum OperationType {
-  CREATE = 'create',
-  UPDATE = 'update',
-  DELETE = 'delete',
-  LIST = 'list',
-  GET = 'get',
-  WRITE = 'write',
-}
-
-interface FirestoreErrorInfo {
-  error: string;
-  operationType: OperationType;
-  path: string | null;
-  authInfo: {
-    userId: string | undefined;
-    email: string | null | undefined;
-    emailVerified: boolean | undefined;
-    isAnonymous: boolean | undefined;
-    tenantId: string | null | undefined;
-    providerInfo: {
-      providerId: string;
-      displayName: string | null;
-      email: string | null;
-      photoUrl: string | null;
-    }[];
-  }
-}
-
-function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData.map(provider => ({
-        providerId: provider.providerId,
-        displayName: provider.displayName,
-        email: provider.email,
-        photoUrl: provider.photoURL
-      })) || []
-    },
-    operationType,
-    path
-  }
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
-}
 
 class ErrorBoundary extends (React.Component as any) {
   constructor(props: any) {
@@ -136,6 +76,23 @@ class ErrorBoundary extends (React.Component as any) {
   }
 }
 
+// --- Utilities ---
+
+const optimizeUnsplashUrl = (url: string, width: number = 800, quality: number = 80) => {
+  if (!url.includes('images.unsplash.com')) return url;
+  
+  try {
+    const urlObj = new URL(url);
+    urlObj.searchParams.set('w', width.toString());
+    urlObj.searchParams.set('q', quality.toString());
+    urlObj.searchParams.set('auto', 'format');
+    urlObj.searchParams.set('fit', 'crop');
+    return urlObj.toString();
+  } catch (e) {
+    return url;
+  }
+};
+
 // --- Components ---
 
 const TopBar = () => (
@@ -159,7 +116,13 @@ const Navbar = ({ isAdmin, user }: { isAdmin: boolean, user: User | null }) => {
 
   const handleLogin = async () => {
     try {
-      await signInWithPopup(auth, googleProvider);
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: window.location.origin
+        }
+      });
+      if (error) throw error;
     } catch (error) {
       console.error("Login failed", error);
     }
@@ -167,7 +130,8 @@ const Navbar = ({ isAdmin, user }: { isAdmin: boolean, user: User | null }) => {
 
   const handleLogout = async () => {
     try {
-      await signOut(auth);
+      const { error } = await supabase.auth.signOut();
+      if (error) throw error;
     } catch (error) {
       console.error("Logout failed", error);
     }
@@ -313,19 +277,100 @@ const Navbar = ({ isAdmin, user }: { isAdmin: boolean, user: User | null }) => {
   );
 };
 
-const Hero = () => (
-  <section className="relative min-h-[80vh] md:h-screen overflow-hidden flex items-center justify-center py-16 md:py-0">
-    {/* Background Image */}
-    <div 
-      className="absolute inset-0 bg-cover bg-center bg-no-repeat"
-      style={{ 
-        backgroundImage: `url('https://images.unsplash.com/photo-1598554889165-8139a49f2883?q=80&w=2000&auto=format&fit=crop')`,
-      }}
-    >
-      <div className="absolute inset-0 bg-white/10" />
-    </div>
+const Hero = ({ settings, isAdmin, onUpdate }: { settings: any, isAdmin: boolean, onUpdate: (id: string, val: string | File) => void }) => {
+  const [isEditing, setIsEditing] = useState(false);
+  const [tempUrl, setTempUrl] = useState(settings.hero_bg);
+  const [uploading, setUploading] = useState(false);
 
-    {/* Content Card */}
+  const handleSave = () => {
+    onUpdate('hero_bg', tempUrl);
+    setIsEditing(false);
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setUploading(true);
+      try {
+        await onUpdate('hero_bg', file);
+        setIsEditing(false);
+      } finally {
+        setUploading(false);
+      }
+    }
+  };
+
+  return (
+    <section className="relative min-h-[80vh] md:h-screen overflow-hidden flex items-center justify-center py-16 md:py-0">
+      {/* Background Image */}
+      <div 
+        className="absolute inset-0 bg-cover bg-center bg-no-repeat transition-all duration-700"
+        style={{ 
+          backgroundImage: `url('${optimizeUnsplashUrl(settings.hero_bg || 'https://images.unsplash.com/photo-1598554889165-8139a49f2883', 1920, 75)}')`,
+        }}
+      >
+        <div className="absolute inset-0 bg-white/10" />
+      </div>
+
+      {isAdmin && (
+        <div className="absolute top-4 right-4 z-20">
+          {isEditing ? (
+            <div className="bg-white p-4 rounded-2xl shadow-xl flex flex-col gap-3 min-w-[300px]">
+              <label className="text-[10px] font-bold text-[#1a2b5f] uppercase tracking-wider">Update Hero Image</label>
+              
+              <div className="flex flex-col gap-2">
+                <span className="text-[9px] text-gray-400 uppercase font-bold">Option 1: Upload File</span>
+                <input 
+                  type="file" 
+                  accept="image/*"
+                  onChange={handleFileChange}
+                  disabled={uploading}
+                  className="text-xs text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-[#f0f4f8] file:text-[#2f3f8f] hover:file:bg-[#e0e8f0]"
+                />
+              </div>
+
+              <div className="relative flex items-center py-2">
+                <div className="flex-grow border-t border-gray-100"></div>
+                <span className="flex-shrink mx-4 text-[8px] text-gray-300 uppercase font-bold">OR</span>
+                <div className="flex-grow border-t border-gray-100"></div>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <span className="text-[9px] text-gray-400 uppercase font-bold">Option 2: Image URL</span>
+                <input 
+                  type="text" 
+                  className="bg-[#f0f4f8] border-none rounded-xl p-2 text-xs outline-none"
+                  placeholder="https://..."
+                  value={tempUrl}
+                  onChange={(e) => setTempUrl(e.target.value)}
+                />
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button 
+                  onClick={handleSave} 
+                  disabled={uploading}
+                  className="flex-grow bg-[#2f3f8f] text-white px-4 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1 disabled:opacity-50"
+                >
+                  {uploading ? 'Uploading...' : <><Save className="w-3 h-3" /> Save URL</>}
+                </button>
+                <button onClick={() => setIsEditing(false)} className="bg-gray-200 text-gray-600 px-4 py-2 rounded-lg text-xs font-bold">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button 
+              onClick={() => setIsEditing(true)}
+              className="bg-white/80 backdrop-blur-sm p-3 rounded-full shadow-lg hover:bg-white transition-all text-[#2f3f8f]"
+            >
+              <Edit2 className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Content Card */}
     <div className="relative z-10 w-full flex justify-center px-4">
       <motion.div 
         initial={{ y: 60, opacity: 0 }}
@@ -371,45 +416,153 @@ const Hero = () => (
       </motion.div>
     </div>
   </section>
-);
+  );
+};
 
-const About = () => (
-  <section id="about" className="bg-[#eef5f9] py-20 md:py-40 px-6 md:px-12 scroll-mt-24">
-    <div className="max-w-7xl mx-auto flex flex-col items-center">
-      
-      {/* Images Layout */}
-      <div className="relative w-full max-w-4xl h-[400px] sm:h-[500px] md:h-[700px] mb-16 md:mb-24">
-        {/* Back Image with Thick Border */}
-        <motion.div 
-          initial={{ opacity: 0, scale: 0.95 }}
-          whileInView={{ opacity: 1, scale: 1 }}
-          viewport={{ once: true }}
-          className="absolute right-0 top-0 w-3/4 h-full border-[12px] md:border-[20px] border-[#2f3f8f] rounded-sm overflow-hidden shadow-2xl"
-        >
-          <img 
-            src="https://images.unsplash.com/photo-1556905055-8f358a7a4bb4?q=80&w=1000&auto=format&fit=crop" 
-            alt="Elegant Fabrics" 
-            className="w-full h-full object-cover"
-            referrerPolicy="no-referrer"
-          />
-        </motion.div>
+const About = ({ settings, isAdmin, onUpdate }: { settings: any, isAdmin: boolean, onUpdate: (id: string, val: string | File) => void }) => {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [tempUrl, setTempUrl] = useState('');
+  const [uploading, setUploading] = useState(false);
+
+  const startEdit = (id: string, currentVal: string) => {
+    setEditingId(id);
+    setTempUrl(currentVal);
+  };
+
+  const handleSave = () => {
+    if (editingId) {
+      onUpdate(editingId, tempUrl);
+      setEditingId(null);
+    }
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && editingId) {
+      setUploading(true);
+      try {
+        await onUpdate(editingId, file);
+        setEditingId(null);
+      } finally {
+        setUploading(false);
+      }
+    }
+  };
+
+  return (
+    <section id="about" className="bg-[#eef5f9] py-20 md:py-40 px-6 md:px-12 scroll-mt-24">
+      <div className="max-w-7xl mx-auto flex flex-col items-center">
         
-        {/* Front Image */}
-        <motion.div 
-          initial={{ opacity: 0, x: -50 }}
-          whileInView={{ opacity: 1, x: 0 }}
-          viewport={{ once: true }}
-          transition={{ delay: 0.3 }}
-          className="absolute left-0 top-1/2 -translate-y-1/2 w-3/5 h-3/4 bg-white p-3 md:p-4 shadow-2xl rounded-sm z-10"
-        >
-          <img 
-            src="https://images.unsplash.com/photo-1598554747436-c9293d6a588f?q=80&w=1000&auto=format&fit=crop" 
-            alt="Female tailor measuring client" 
-            className="w-full h-full object-cover"
-            referrerPolicy="no-referrer"
-          />
-        </motion.div>
-      </div>
+        {/* Images Layout */}
+        <div className="relative w-full max-w-4xl h-[400px] sm:h-[500px] md:h-[700px] mb-16 md:mb-24">
+          {/* Back Image with Thick Border */}
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95 }}
+            whileInView={{ opacity: 1, scale: 1 }}
+            viewport={{ once: true }}
+            className="absolute right-0 top-0 w-3/4 h-full border-[12px] md:border-[20px] border-[#2f3f8f] rounded-sm overflow-hidden shadow-2xl group"
+          >
+            <img 
+              src={optimizeUnsplashUrl(settings.about_back || "https://images.unsplash.com/photo-1556905055-8f358a7a4bb4", 1000)} 
+              alt="Elegant Fabrics" 
+              className="w-full h-full object-cover"
+              referrerPolicy="no-referrer"
+            />
+            {isAdmin && (
+              <button 
+                onClick={() => startEdit('about_back', settings.about_back)}
+                className="absolute top-4 right-4 bg-white/80 backdrop-blur-sm p-2 rounded-full opacity-0 group-hover:opacity-100 transition-all text-[#2f3f8f]"
+              >
+                <Edit2 className="w-4 h-4" />
+              </button>
+            )}
+          </motion.div>
+          
+          {/* Front Image */}
+          <motion.div 
+            initial={{ opacity: 0, x: -50 }}
+            whileInView={{ opacity: 1, x: 0 }}
+            viewport={{ once: true }}
+            transition={{ delay: 0.3 }}
+            className="absolute left-0 top-1/2 -translate-y-1/2 w-3/5 h-3/4 bg-white p-3 md:p-4 shadow-2xl rounded-sm z-10 group"
+          >
+            <img 
+              src={optimizeUnsplashUrl(settings.about_front || "https://images.unsplash.com/photo-1598554747436-c9293d6a588f", 800)} 
+              alt="Female tailor measuring client" 
+              className="w-full h-full object-cover"
+              referrerPolicy="no-referrer"
+            />
+            {isAdmin && (
+              <button 
+                onClick={() => startEdit('about_front', settings.about_front)}
+                className="absolute top-4 right-4 bg-white/80 backdrop-blur-sm p-2 rounded-full opacity-0 group-hover:opacity-100 transition-all text-[#2f3f8f]"
+              >
+                <Edit2 className="w-4 h-4" />
+              </button>
+            )}
+          </motion.div>
+
+          {/* Edit Modal for About Images */}
+          <AnimatePresence>
+            {editingId && (
+              <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="fixed inset-0 z-[100] bg-black/50 backdrop-blur-sm flex items-center justify-center p-6"
+              >
+                <motion.div 
+                  initial={{ scale: 0.9, y: 20 }}
+                  animate={{ scale: 1, y: 0 }}
+                  className="bg-white p-8 rounded-3xl shadow-2xl max-w-md w-full"
+                >
+                  <h3 className="text-xl font-bold text-[#1a2b5f] mb-6 uppercase tracking-wider">Update Image</h3>
+                  <div className="flex flex-col gap-6">
+                    <div className="flex flex-col gap-2">
+                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Option 1: Upload File</label>
+                      <input 
+                        type="file" 
+                        accept="image/*"
+                        onChange={handleFileChange}
+                        disabled={uploading}
+                        className="text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-[#f0f4f8] file:text-[#2f3f8f] hover:file:bg-[#e0e8f0]"
+                      />
+                    </div>
+
+                    <div className="relative flex items-center">
+                      <div className="flex-grow border-t border-gray-100"></div>
+                      <span className="flex-shrink mx-4 text-[10px] text-gray-300 uppercase font-bold">OR</span>
+                      <div className="flex-grow border-t border-gray-100"></div>
+                    </div>
+
+                    <div className="flex flex-col gap-2">
+                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Option 2: Image URL</label>
+                      <input 
+                        type="text" 
+                        className="bg-[#f0f4f8] border-none rounded-xl p-4 text-sm outline-none w-full"
+                        value={tempUrl}
+                        onChange={(e) => setTempUrl(e.target.value)}
+                      />
+                    </div>
+
+                    <div className="flex gap-3">
+                      <button 
+                        onClick={handleSave} 
+                        disabled={uploading}
+                        className="flex-grow bg-[#2f3f8f] text-white py-4 rounded-xl font-bold flex items-center justify-center gap-2 disabled:opacity-50"
+                      >
+                        {uploading ? 'Uploading...' : <><Save className="w-4 h-4" /> Save URL</>}
+                      </button>
+                      <button onClick={() => setEditingId(null)} className="px-6 py-4 rounded-xl border border-gray-200 font-bold text-gray-500">
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                </motion.div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
 
       {/* Content Below Images */}
       <div className="flex flex-col items-center text-center max-w-3xl">
@@ -456,7 +609,8 @@ const About = () => (
       </div>
     </div>
   </section>
-);
+  );
+};
 
 const Services = () => {
   const services = [
@@ -522,38 +676,95 @@ const OurWorks = ({ isAdmin }: { isAdmin: boolean }) => {
   const [works, setWorks] = useState<any[]>([]);
   const [showUpload, setShowUpload] = useState(false);
   const [newWork, setNewWork] = useState({ title: '', category: 'Bespoke', image: '' });
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
+
+  const fetchWorks = async () => {
+    const { data, error } = await supabase
+      .from('works')
+      .select('*')
+      .order('created_at', { ascending: false });
+    
+    if (error) {
+      console.error("Error fetching works:", error);
+    } else {
+      setWorks(data || []);
+    }
+  };
 
   useEffect(() => {
-    const q = query(collection(db, 'works'), orderBy('createdAt', 'desc'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const worksData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setWorks(worksData);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, 'works');
-    });
-    return () => unsubscribe();
+    fetchWorks();
+    
+    // Set up real-time subscription
+    const channel = supabase
+      .channel('works-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'works' }, () => {
+        fetchWorks();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   const handleUpload = async (e: FormEvent) => {
     e.preventDefault();
+    setUploading(true);
     try {
-      await addDoc(collection(db, 'works'), {
-        ...newWork,
-        createdAt: serverTimestamp()
-      });
+      let imageUrl = newWork.image;
+
+      if (selectedFile) {
+        const fileExt = selectedFile.name.split('.').pop();
+        const fileName = `${Math.random()}.${fileExt}`;
+        const filePath = `works/${fileName}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from('images')
+          .upload(filePath, selectedFile);
+
+        if (uploadError) throw uploadError;
+
+        const { data: { publicUrl } } = supabase.storage
+          .from('images')
+          .getPublicUrl(filePath);
+        
+        imageUrl = publicUrl;
+      }
+
+      if (!imageUrl) throw new Error("Please provide an image URL or upload a file.");
+
+      const { error } = await supabase
+        .from('works')
+        .insert([
+          { ...newWork, image: imageUrl, created_at: new Date().toISOString() }
+        ]);
+      
+      if (error) throw error;
+      
       setNewWork({ title: '', category: 'Bespoke', image: '' });
+      setSelectedFile(null);
       setShowUpload(false);
     } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'works');
+      console.error("Error uploading work:", error);
+      alert("Failed to upload. Check console for details.");
+    } finally {
+      setUploading(false);
     }
   };
 
   const handleDelete = async (id: string) => {
     if (!window.confirm('Are you sure you want to delete this work?')) return;
     try {
-      await deleteDoc(doc(db, 'works', id));
+      const { error } = await supabase
+        .from('works')
+        .delete()
+        .eq('id', id);
+      
+      if (error) throw error;
     } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `works/${id}`);
+      console.error("Error deleting work:", error);
+      alert("Failed to delete. Check console for details.");
     }
   };
 
@@ -587,7 +798,7 @@ const OurWorks = ({ isAdmin }: { isAdmin: boolean }) => {
               exit={{ opacity: 0, height: 0 }}
               className="max-w-2xl mx-auto mb-16 overflow-hidden"
             >
-              <form onSubmit={handleUpload} className="bg-white p-8 rounded-3xl shadow-lg grid grid-cols-1 md:grid-cols-2 gap-4">
+              <form onSubmit={handleUpload} className="bg-white p-8 rounded-3xl shadow-lg grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="flex flex-col gap-2">
                   <label className="text-[10px] font-bold text-[#1a2b5f] uppercase tracking-wider">Title</label>
                   <input 
@@ -612,22 +823,43 @@ const OurWorks = ({ isAdmin }: { isAdmin: boolean }) => {
                     <option value="Tailored">Tailored</option>
                   </select>
                 </div>
+                
                 <div className="flex flex-col gap-2 md:col-span-2">
-                  <label className="text-[10px] font-bold text-[#1a2b5f] uppercase tracking-wider">Image URL</label>
-                  <input 
-                    type="url" 
-                    required
-                    placeholder="https://images.unsplash.com/..."
-                    className="bg-[#f0f4f8] border-none rounded-xl p-3 text-sm focus:ring-2 focus:ring-[#2f3f8f] outline-none"
-                    value={newWork.image}
-                    onChange={(e) => setNewWork({...newWork, image: e.target.value})}
-                  />
+                  <label className="text-[10px] font-bold text-[#1a2b5f] uppercase tracking-wider">Upload Image</label>
+                  <div className="flex flex-col gap-4 p-4 border-2 border-dashed border-gray-100 rounded-2xl bg-gray-50/50">
+                    <input 
+                      type="file" 
+                      accept="image/*"
+                      onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
+                      className="text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-[#2f3f8f] file:text-white hover:file:bg-[#1a2b5f]"
+                    />
+                    
+                    <div className="relative flex items-center">
+                      <div className="flex-grow border-t border-gray-200"></div>
+                      <span className="flex-shrink mx-4 text-[10px] text-gray-300 uppercase font-bold">OR USE URL</span>
+                      <div className="flex-grow border-t border-gray-200"></div>
+                    </div>
+
+                    <input 
+                      type="url" 
+                      placeholder="https://images.unsplash.com/..."
+                      className="bg-white border border-gray-100 rounded-xl p-3 text-sm focus:ring-2 focus:ring-[#2f3f8f] outline-none"
+                      value={newWork.image}
+                      onChange={(e) => setNewWork({...newWork, image: e.target.value})}
+                    />
+                  </div>
                 </div>
+
                 <button 
                   type="submit"
-                  className="md:col-span-2 bg-[#2f3f8f] text-white py-4 rounded-xl font-bold hover:bg-[#1a2b5f] transition-all"
+                  disabled={uploading}
+                  className="md:col-span-2 bg-[#2f3f8f] text-white py-4 rounded-xl font-bold hover:bg-[#1a2b5f] transition-all flex items-center justify-center gap-2 disabled:opacity-50"
                 >
-                  Upload to Gallery
+                  {uploading ? (
+                    <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-white"></div>
+                  ) : (
+                    <><Upload className="w-5 h-5" /> Upload to Gallery</>
+                  )}
                 </button>
               </form>
             </motion.div>
@@ -646,7 +878,7 @@ const OurWorks = ({ isAdmin }: { isAdmin: boolean }) => {
             >
               <div className="aspect-[4/5] overflow-hidden">
                 <img 
-                  src={work.image} 
+                  src={optimizeUnsplashUrl(work.image, 600)} 
                   alt={work.title} 
                   className="h-full w-full object-cover transition-transform duration-700 group-hover:scale-110"
                   referrerPolicy="no-referrer"
@@ -691,15 +923,32 @@ const Testimonials = ({ isAdmin }: { isAdmin: boolean }) => {
   const [showForm, setShowForm] = useState(false);
   const [newTestimonial, setNewTestimonial] = useState({ name: '', quote: '', rating: 5 });
 
+  const fetchTestimonials = async () => {
+    const { data, error } = await supabase
+      .from('testimonials')
+      .select('*')
+      .order('created_at', { ascending: false });
+    
+    if (error) {
+      console.error("Error fetching testimonials:", error);
+    } else {
+      setTestimonials(data || []);
+    }
+  };
+
   useEffect(() => {
-    const q = query(collection(db, 'testimonials'), orderBy('createdAt', 'desc'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const testimonialsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setTestimonials(testimonialsData);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, 'testimonials');
-    });
-    return () => unsubscribe();
+    fetchTestimonials();
+
+    const channel = supabase
+      .channel('testimonials-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'testimonials' }, () => {
+        fetchTestimonials();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   const next = () => {
@@ -716,16 +965,21 @@ const Testimonials = ({ isAdmin }: { isAdmin: boolean }) => {
     e.preventDefault();
     if (newTestimonial.name && newTestimonial.quote) {
       try {
-        await addDoc(collection(db, 'testimonials'), {
-          ...newTestimonial,
-          createdAt: serverTimestamp()
-        });
+        const { error } = await supabase
+          .from('testimonials')
+          .insert([
+            { ...newTestimonial, created_at: new Date().toISOString() }
+          ]);
+        
+        if (error) throw error;
+
         setNewTestimonial({ name: '', quote: '', rating: 5 });
         setShowForm(false);
         setCurrentIndex(0);
         alert('Thank you for your feedback!');
       } catch (error) {
-        handleFirestoreError(error, OperationType.CREATE, 'testimonials');
+        console.error("Error adding testimonial:", error);
+        alert("Failed to post testimonial.");
       }
     }
   };
@@ -733,12 +987,18 @@ const Testimonials = ({ isAdmin }: { isAdmin: boolean }) => {
   const handleDelete = async (id: string) => {
     if (!window.confirm('Delete this testimonial?')) return;
     try {
-      await deleteDoc(doc(db, 'testimonials', id));
+      const { error } = await supabase
+        .from('testimonials')
+        .delete()
+        .eq('id', id);
+      
+      if (error) throw error;
+
       if (currentIndex >= testimonials.length - 1) {
         setCurrentIndex(Math.max(0, testimonials.length - 2));
       }
     } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `testimonials/${id}`);
+      console.error("Error deleting testimonial:", error);
     }
   };
 
@@ -1191,26 +1451,78 @@ export default function App() {
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
+  const [settings, setSettings] = useState<any>({
+    hero_bg: 'https://images.unsplash.com/photo-1598554889165-8139a49f2883?q=80&w=2000&auto=format&fit=crop',
+    about_back: 'https://images.unsplash.com/photo-1556905055-8f358a7a4bb4?q=80&w=1000&auto=format&fit=crop',
+    about_front: 'https://images.unsplash.com/photo-1598554747436-c9293d6a588f?q=80&w=1000&auto=format&fit=crop'
+  });
+
+  const fetchSettings = async () => {
+    const { data, error } = await supabase
+      .from('site_settings')
+      .select('*');
+    
+    if (error) {
+      console.error("Error fetching settings:", error);
+    } else if (data) {
+      const settingsMap = data.reduce((acc: any, item: any) => {
+        acc[item.id] = item.value;
+        return acc;
+      }, {});
+      setSettings((prev: any) => ({ ...prev, ...settingsMap }));
+    }
+  };
+
+  const updateSetting = async (id: string, value: string | File) => {
+    try {
+      let finalValue = value;
+
+      if (value instanceof File) {
+        const fileExt = value.name.split('.').pop();
+        const fileName = `${id}-${Math.random()}.${fileExt}`;
+        const filePath = `settings/${fileName}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from('images')
+          .upload(filePath, value);
+
+        if (uploadError) throw uploadError;
+
+        const { data: { publicUrl } } = supabase.storage
+          .from('images')
+          .getPublicUrl(filePath);
+        
+        finalValue = publicUrl;
+      }
+
+      const { error } = await supabase
+        .from('site_settings')
+        .upsert({ id, value: finalValue, updated_at: new Date().toISOString() });
+      
+      if (error) throw error;
+      setSettings((prev: any) => ({ ...prev, [id]: finalValue }));
+    } catch (error) {
+      console.error("Error updating setting:", error);
+      alert("Failed to update image. Make sure the 'images' storage bucket exists and is public.");
+    }
+  };
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
-      setUser(u);
+    // Initial session check
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
       setIsAuthReady(true);
     });
-    return () => unsubscribe();
-  }, []);
 
-  useEffect(() => {
-    const testConnection = async () => {
-      try {
-        await getDocFromServer(doc(db, 'test', 'connection'));
-      } catch (error) {
-        if (error instanceof Error && error.message.includes('the client is offline')) {
-          console.error("Please check your Firebase configuration. ");
-        }
-      }
-    };
-    testConnection();
+    // Listen for auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+      setIsAuthReady(true);
+    });
+
+    fetchSettings();
+
+    return () => subscription.unsubscribe();
   }, []);
 
   useEffect(() => {
@@ -1240,8 +1552,8 @@ export default function App() {
       <div className="min-h-screen bg-white font-sans selection:bg-[#2f3f8f] selection:text-white">
         <TopBar />
         <Navbar isAdmin={isAdmin} user={user} />
-        <Hero />
-        <About />
+        <Hero settings={settings} isAdmin={isAdmin} onUpdate={updateSetting} />
+        <About settings={settings} isAdmin={isAdmin} onUpdate={updateSetting} />
         <Services />
         <OurWorks isAdmin={isAdmin} />
         <Testimonials isAdmin={isAdmin} />
