@@ -104,7 +104,7 @@ const TopBar = () => (
   </div>
 );
 
-const Navbar = ({ isAdmin, user }: { isAdmin: boolean, user: User | null }) => {
+const Navbar = ({ isAdmin, onLogin, onLogout }: { isAdmin: boolean, onLogin: () => void, onLogout: () => void }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
 
@@ -113,29 +113,6 @@ const Navbar = ({ isAdmin, user }: { isAdmin: boolean, user: User | null }) => {
     window.addEventListener('scroll', handleScroll);
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
-
-  const handleLogin = async () => {
-    try {
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo: window.location.origin
-        }
-      });
-      if (error) throw error;
-    } catch (error) {
-      console.error("Login failed", error);
-    }
-  };
-
-  const handleLogout = async () => {
-    try {
-      const { error } = await supabase.auth.signOut();
-      if (error) throw error;
-    } catch (error) {
-      console.error("Logout failed", error);
-    }
-  };
 
   const navLinks = [
     { name: 'About Us', href: '#about' },
@@ -173,17 +150,17 @@ const Navbar = ({ isAdmin, user }: { isAdmin: boolean, user: User | null }) => {
             </a>
           ))}
           
-          {user ? (
+          {isAdmin ? (
             <button 
-              onClick={handleLogout}
+              onClick={onLogout}
               className="flex items-center gap-2 text-[10px] font-bold text-red-500 hover:text-red-700 uppercase tracking-widest"
             >
               <LogOut className="w-3 h-3" />
-              Logout {isAdmin && "(Admin)"}
+              Logout (Admin)
             </button>
           ) : (
             <button 
-              onClick={handleLogin}
+              onClick={onLogin}
               className="flex items-center gap-2 text-[10px] font-bold text-[#2f3f8f] hover:text-[#1a2b5f] uppercase tracking-widest"
             >
               <LogIn className="w-3 h-3" />
@@ -240,17 +217,17 @@ const Navbar = ({ isAdmin, user }: { isAdmin: boolean, user: User | null }) => {
                 </motion.a>
               ))}
               
-              {user ? (
+              {isAdmin ? (
                 <button 
-                  onClick={handleLogout}
+                  onClick={() => { onLogout(); setIsOpen(false); }}
                   className="text-xl font-bold text-red-500 flex items-center gap-2"
                 >
                   <LogOut className="w-6 h-6" />
-                  Logout {isAdmin && "(Admin)"}
+                  Logout (Admin)
                 </button>
               ) : (
                 <button 
-                  onClick={handleLogin}
+                  onClick={() => { onLogin(); setIsOpen(false); }}
                   className="text-xl font-bold text-[#2f3f8f] flex items-center gap-2"
                 >
                   <LogIn className="w-6 h-6" />
@@ -1449,8 +1426,10 @@ const Footer = () => (
 
 export default function App() {
   const [showScrollTop, setShowScrollTop] = useState(false);
-  const [user, setUser] = useState<User | null>(null);
-  const [isAuthReady, setIsAuthReady] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  const [password, setPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
   const [settings, setSettings] = useState<any>({
     hero_bg: 'https://images.unsplash.com/photo-1598554889165-8139a49f2883?q=80&w=2000&auto=format&fit=crop',
     about_back: 'https://images.unsplash.com/photo-1556905055-8f358a7a4bb4?q=80&w=1000&auto=format&fit=crop',
@@ -1458,6 +1437,7 @@ export default function App() {
   });
 
   const fetchSettings = async () => {
+    if (!supabase) return;
     const { data, error } = await supabase
       .from('site_settings')
       .select('*');
@@ -1474,6 +1454,10 @@ export default function App() {
   };
 
   const updateSetting = async (id: string, value: string | File) => {
+    if (!supabase) {
+      alert("Database not connected. Please check your Supabase configuration.");
+      return;
+    }
     try {
       let finalValue = value;
 
@@ -1508,21 +1492,12 @@ export default function App() {
   };
 
   useEffect(() => {
-    // Initial session check
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null);
-      setIsAuthReady(true);
-    });
-
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-      setIsAuthReady(true);
-    });
-
+    // Check local storage for admin session
+    const savedAdmin = localStorage.getItem('is_admin');
+    if (savedAdmin === 'true') {
+      setIsAdmin(true);
+    }
     fetchSettings();
-
-    return () => subscription.unsubscribe();
   }, []);
 
   useEffect(() => {
@@ -1533,25 +1508,33 @@ export default function App() {
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
 
+  const handleLogin = (e: FormEvent) => {
+    e.preventDefault();
+    if (password === 'Favour@1997') {
+      setIsAdmin(true);
+      localStorage.setItem('is_admin', 'true');
+      setShowLoginModal(false);
+      setPassword('');
+      setLoginError('');
+    } else {
+      setLoginError('Incorrect password');
+    }
+  };
+
+  const handleLogout = () => {
+    setIsAdmin(false);
+    localStorage.removeItem('is_admin');
+  };
+
   const scrollToTop = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
-
-  const isAdmin = user?.email === 'owoadeemmy@gmail.com';
-
-  if (!isAuthReady) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-white">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#2f3f8f]"></div>
-      </div>
-    );
-  }
 
   return (
     <ErrorBoundary>
       <div className="min-h-screen bg-white font-sans selection:bg-[#2f3f8f] selection:text-white">
         <TopBar />
-        <Navbar isAdmin={isAdmin} user={user} />
+        <Navbar isAdmin={isAdmin} onLogin={() => setShowLoginModal(true)} onLogout={handleLogout} />
         <Hero settings={settings} isAdmin={isAdmin} onUpdate={updateSetting} />
         <About settings={settings} isAdmin={isAdmin} onUpdate={updateSetting} />
         <Services />
@@ -1561,6 +1544,57 @@ export default function App() {
         <PlaceholderSection id="store" title="Online Store" number="06" />
         <ContactUs />
         <Footer />
+
+        {/* Login Modal */}
+        <AnimatePresence>
+          {showLoginModal && (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+              <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setShowLoginModal(false)}
+                className="absolute inset-0 bg-[#1a2b5f]/40 backdrop-blur-sm"
+              />
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.9, y: 20 }}
+                className="relative bg-white w-full max-w-sm rounded-[2rem] shadow-2xl p-8 md:p-10"
+              >
+                <div className="flex justify-between items-center mb-8">
+                  <h3 className="text-2xl font-bold text-[#1a2b5f]">Admin Login</h3>
+                  <button onClick={() => setShowLoginModal(false)} className="text-gray-400 hover:text-gray-600">
+                    <X className="w-6 h-6" />
+                  </button>
+                </div>
+                
+                <form onSubmit={handleLogin} className="flex flex-col gap-6">
+                  <div className="flex flex-col gap-2">
+                    <label className="text-[10px] font-bold text-[#1a2b5f] uppercase tracking-wider">Admin Password</label>
+                    <input 
+                      type="password" 
+                      required
+                      autoFocus
+                      className="bg-[#f0f4f8] border-none rounded-2xl px-6 py-4 text-sm focus:ring-2 focus:ring-[#2f3f8f] outline-none"
+                      placeholder="••••••••"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                    />
+                    {loginError && <p className="text-red-500 text-[10px] font-bold uppercase mt-1">{loginError}</p>}
+                  </div>
+                  
+                  <button 
+                    type="submit"
+                    className="bg-[#2f3f8f] text-white py-4 rounded-2xl font-bold text-sm hover:bg-[#1a2b5f] transition-all shadow-lg"
+                  >
+                    Login to Dashboard
+                  </button>
+                </form>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
 
         {/* Back to Top Button */}
         <AnimatePresence>
